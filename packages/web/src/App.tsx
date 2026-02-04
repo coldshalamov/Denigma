@@ -39,6 +39,7 @@ export function App() {
   const [owner, setOwner] = useState("");
   const [repo, setRepo] = useState("");
   const [ref, setRef] = useState("main");
+  const [baseDir, setBaseDir] = useState("");
   const [token, setToken] = useState("");
   const [copied, setCopied] = useState(false);
 
@@ -66,6 +67,7 @@ export function App() {
     if (initial.owner) setOwner(initial.owner);
     if (initial.repo) setRepo(initial.repo);
     if (initial.ref) setRef(initial.ref);
+    if (initial.baseDir) setBaseDir(initial.baseDir);
     if (initial.fileQuery) setFileFilter(initial.fileQuery);
     if (initial.status) setStatusFilter(initial.status);
     if (initial.path) setActivePath(initial.path);
@@ -78,6 +80,7 @@ export function App() {
       ...(owner.trim() ? { owner } : {}),
       ...(repo.trim() ? { repo } : {}),
       ...(ref.trim() ? { ref } : {}),
+      ...(baseDir.trim() ? { baseDir } : {}),
       ...(activePath ? { path: activePath } : {}),
       ...(activeSegmentId ? { segment: activeSegmentId } : {}),
       ...(viewMode !== "range" ? { mode: viewMode } : {}),
@@ -85,7 +88,7 @@ export function App() {
       ...(statusFilter !== "all" ? { status: statusFilter } : {}),
     });
     window.history.replaceState(null, "", `${window.location.pathname}${search}`);
-  }, [owner, repo, ref, activePath, activeSegmentId, viewMode, fileFilter, statusFilter]);
+  }, [owner, repo, ref, baseDir, activePath, activeSegmentId, viewMode, fileFilter, statusFilter]);
 
   useEffect(() => {
     if (!copied) return;
@@ -98,12 +101,13 @@ export function App() {
     setFiles({ status: "idle" });
     setActiveFile({ status: "idle" });
     try {
-      const cfg = {
+      const cfgBase = {
         owner: owner.trim(),
         repo: repo.trim(),
         ref: ref.trim() || "main",
       } as const;
 
+      const cfg = baseDir.trim() ? { ...cfgBase, baseDir: baseDir.trim() } : cfgBase;
       const state = await connectGithubRepo(token.trim() ? { ...cfg, token: token.trim() } : cfg);
       setRepoState({ status: "ready", data: state });
 
@@ -309,6 +313,22 @@ export function App() {
                   ))}
                 </datalist>
               ) : null}
+            </label>
+            <label className="field">
+              <div className="fieldLabel">Repo folder (optional)</div>
+              <input
+                className="input"
+                value={baseDir}
+                onChange={(e) => setBaseDir(e.target.value)}
+                placeholder="examples/demo-repo"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && canConnect) void connect();
+                }}
+              />
+              <div className="fieldHint">Use this if `.denigma/` lives under a subfolder.</div>
             </label>
             <label className="field">
               <div className="fieldLabel">Token (optional)</div>

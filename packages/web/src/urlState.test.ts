@@ -7,6 +7,7 @@ describe("urlState", () => {
       owner: "octo",
       repo: "hello-world",
       ref: "main",
+      baseDir: "examples/demo-repo",
       path: "src/index.ts",
       segment: "seg-1",
       mode: "inline",
@@ -20,6 +21,7 @@ describe("urlState", () => {
       owner: "octo",
       repo: "hello-world",
       ref: "main",
+      baseDir: "examples/demo-repo",
       path: "src/index.ts",
       segment: "seg-1",
       mode: "inline",
@@ -34,4 +36,3 @@ describe("urlState", () => {
     expect(decoded.status).toBeUndefined();
   });
 });
-

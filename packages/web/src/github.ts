@@ -104,6 +104,7 @@ export type GithubRepoConfig = {
   repo: string;
   ref: string;
   token?: string;
+  baseDir?: string;
 };
 
 export type GithubRepoState = {
@@ -135,9 +136,9 @@ async function getBlobTextCached(state: GithubRepoState, sha: string): Promise<s
 }
 
 export async function listDenigmaFiles(state: GithubRepoState): Promise<ApiFilesResponse> {
-  const dngPaths = Array.from(state.blobs.keys()).filter(
-    (p) => p.startsWith(".denigma/files/") && p.endsWith(".dng.json"),
-  );
+  const basePrefix = state.config.baseDir ? `${state.config.baseDir.replace(/\/+$/, "")}/` : "";
+  const denigmaPrefix = `${basePrefix}.denigma/files/`;
+  const dngPaths = Array.from(state.blobs.keys()).filter((p) => p.startsWith(denigmaPrefix) && p.endsWith(".dng.json"));
 
   state.sourceToDngPath.clear();
 

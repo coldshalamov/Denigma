@@ -60,4 +60,38 @@ describe("github module", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  test("listDenigmaFiles respects baseDir when scanning for .denigma files", async () => {
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+
+    const dng = {
+      schemaVersion: 1,
+      sourcePath: "examples/demo-repo/src/a.ts",
+      sourceSha256: "x",
+      createdAt: "2026-02-03T00:00:00.000Z",
+      updatedAt: "2026-02-03T00:00:00.000Z",
+      segments: [],
+    };
+    const base64 = Buffer.from(JSON.stringify(dng), "utf8").toString("base64");
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: async () => ({ encoding: "base64", content: base64 }),
+    });
+
+    const state: GithubRepoState = {
+      config: { owner: "octo", repo: "repo", ref: "main", baseDir: "examples/demo-repo" },
+      blobs: new Map([
+        ["examples/demo-repo/.denigma/files/a.dng.json", "sha-dng"],
+        [".denigma/files/ignored.dng.json", "sha-ignored"],
+      ]),
+      sourceToDngPath: new Map(),
+      blobTextCache: new Map(),
+    };
+
+    const list = await listDenigmaFiles(state);
+    expect(list.files.map((f) => f.sourcePath)).toEqual(["examples/demo-repo/src/a.ts"]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });

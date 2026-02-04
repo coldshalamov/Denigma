@@ -4,6 +4,7 @@ export type ViewerUrlState = {
   owner?: string;
   repo?: string;
   ref?: string;
+  baseDir?: string;
   path?: string;
   segment?: string;
   mode?: UrlViewMode;
@@ -23,6 +24,7 @@ export function encodeViewerState(state: ViewerUrlState): string {
   setIfNonEmpty(params, "owner", state.owner);
   setIfNonEmpty(params, "repo", state.repo);
   setIfNonEmpty(params, "ref", state.ref);
+  setIfNonEmpty(params, "base", state.baseDir);
   setIfNonEmpty(params, "path", state.path);
   setIfNonEmpty(params, "seg", state.segment);
   setIfNonEmpty(params, "mode", state.mode);
@@ -37,6 +39,7 @@ export function decodeViewerState(search: string): ViewerUrlState {
   const owner = params.get("owner");
   const repo = params.get("repo");
   const ref = params.get("ref");
+  const baseDir = params.get("base");
   const path = params.get("path");
   const segment = params.get("seg");
   const q = params.get("q");
@@ -47,6 +50,7 @@ export function decodeViewerState(search: string): ViewerUrlState {
   if (owner) state.owner = owner;
   if (repo) state.repo = repo;
   if (ref) state.ref = ref;
+  if (baseDir) state.baseDir = baseDir;
   if (path) state.path = path;
   if (segment) state.segment = segment;
   if (q) state.fileQuery = q;
