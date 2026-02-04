@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { parseDngFile } from "@denigma/core";
+import { parseTextSidecarFile } from "@denigma/core";
 import { initRepo } from "../src/repo.js";
 import { trackFile } from "../src/track.js";
 import { syncFile } from "../src/sync.js";
@@ -25,10 +25,9 @@ describe("syncFile", () => {
     await syncFile(dir, sourceRel);
 
     const updatedText = await readFile(dngPath, "utf8");
-    const updated = parseDngFile(JSON.parse(updatedText));
+    const updated = parseTextSidecarFile(updatedText);
 
     // The first segment should have shifted down by one.
-    expect(updated.segments[0]?.range.startLine).toBeGreaterThan(1);
+    expect(updated?.segments[0]?.range.startLine).toBeGreaterThan(1);
   });
 });
-

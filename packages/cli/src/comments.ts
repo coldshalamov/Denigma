@@ -1,7 +1,17 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { parseDngFile, remapDngFileToText, type DngFile, type DngSegment } from "@denigma/core";
+import {
+  dngFileToTextSidecarFile,
+  formatTextSidecarFile,
+  parseDngFile,
+  parseTextSidecarFile,
+  remapDngFileToText,
+  textSidecarToDngFile,
+  type DngFile,
+  type DngSegment,
+} from "@denigma/core";
 import { encodeRepoRelativePathToDngName, normalizeRepoRelativePath } from "./paths.js";
+import { detectRepoStore, dngSidecarPath } from "./store.js";
 
 type CommentBlock = {
   startLine: number;
@@ -127,15 +137,25 @@ export async function importComments(
   options: ImportCommentsOptions = {},
 ): Promise<{ dng: DngFile; stripped: boolean }> {
   const normalizedSourcePath = normalizeRepoRelativePath(sourceRepoRelativePath);
-  const denigmaFilesDir = join(repoRoot, ".denigma", "files");
-  const dngPath = join(denigmaFilesDir, encodeRepoRelativePathToDngName(normalizedSourcePath));
+  const store = await detectRepoStore(repoRoot);
+  const dngPath =
+    store === "dng"
+      ? dngSidecarPath(repoRoot, normalizedSourcePath)
+      : join(join(repoRoot, ".denigma", "files"), encodeRepoRelativePathToDngName(normalizedSourcePath));
   const sourcePath = join(repoRoot, normalizedSourcePath);
 
   const sourceText = await readFile(sourcePath, "utf8");
   const sourceLines = splitLines(sourceText);
 
   const dngText = await readFile(dngPath, "utf8");
-  const parsed = parseDngFile(JSON.parse(dngText));
+  const parsed =
+    store === "dng"
+      ? (() => {
+          const sidecar = parseTextSidecarFile(dngText);
+          if (!sidecar) throw new Error("Invalid .dng sidecar");
+          return textSidecarToDngFile(sidecar, sourceText);
+        })()
+      : parseDngFile(JSON.parse(dngText));
 
   const commentBlocks = extractCommentBlocks(sourceText);
   if (commentBlocks.length === 0 && !options.strip) {
@@ -160,7 +180,11 @@ export async function importComments(
   };
 
   if (!options.strip) {
-    await writeFile(dngPath, JSON.stringify(dngWithImports, null, 2) + "\n", "utf8");
+    if (store === "dng") {
+      await writeFile(dngPath, formatTextSidecarFile(dngFileToTextSidecarFile(dngWithImports)), "utf8");
+    } else {
+      await writeFile(dngPath, JSON.stringify(dngWithImports, null, 2) + "\n", "utf8");
+    }
     return { dng: dngWithImports, stripped: false };
   }
 
@@ -178,7 +202,10 @@ export async function importComments(
   await writeFile(sourcePath, strippedText.endsWith("\n") ? strippedText : strippedText + "\n", "utf8");
 
   const remapped = remapDngFileToText(dngWithImports, strippedText);
-  await writeFile(dngPath, JSON.stringify(remapped, null, 2) + "\n", "utf8");
+  if (store === "dng") {
+    await writeFile(dngPath, formatTextSidecarFile(dngFileToTextSidecarFile(remapped)), "utf8");
+  } else {
+    await writeFile(dngPath, JSON.stringify(remapped, null, 2) + "\n", "utf8");
+  }
   return { dng: remapped, stripped: true };
 }
-

@@ -1,20 +1,37 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { parseDngFile, remapDngFileToText } from "@denigma/core";
-import { encodeRepoRelativePathToDngName, normalizeRepoRelativePath } from "./paths.js";
+import {
+  dngFileToTextSidecarFile,
+  formatTextSidecarFile,
+  parseDngFile,
+  parseTextSidecarFile,
+  remapDngFileToText,
+  textSidecarToDngFile,
+} from "@denigma/core";
+import { normalizeRepoRelativePath } from "./paths.js";
+import { denigmaSidecarPath, detectRepoStore, dngSidecarPath } from "./store.js";
 
 export async function syncFile(repoRoot: string, sourceRepoRelativePath: string): Promise<void> {
-  const denigmaFilesDir = join(repoRoot, ".denigma", "files");
   const normalizedSourcePath = normalizeRepoRelativePath(sourceRepoRelativePath);
-  const dngName = encodeRepoRelativePathToDngName(normalizedSourcePath);
-  const dngPath = join(denigmaFilesDir, dngName);
+  const store = await detectRepoStore(repoRoot);
+  const sidecarAbsPath = store === "dng" ? dngSidecarPath(repoRoot, normalizedSourcePath) : denigmaSidecarPath(repoRoot, normalizedSourcePath);
 
-  const sourcePath = join(repoRoot, normalizedSourcePath);
-  const sourceText = await readFile(sourcePath, "utf8");
+  const sourceAbsPath = join(repoRoot, ...normalizedSourcePath.split("/"));
+  const sourceText = await readFile(sourceAbsPath, "utf8");
 
-  const dngText = await readFile(dngPath, "utf8");
+  if (store === "dng") {
+    const text = await readFile(sidecarAbsPath, "utf8");
+    const parsed = parseTextSidecarFile(text);
+    if (!parsed) throw new Error(`Invalid .dng sidecar: ${sidecarAbsPath}`);
+    const dng = textSidecarToDngFile(parsed, sourceText);
+    const remapped = remapDngFileToText(dng, sourceText);
+    await writeFile(sidecarAbsPath, formatTextSidecarFile(dngFileToTextSidecarFile(remapped)), "utf8");
+    return;
+  }
+
+  const dngText = await readFile(sidecarAbsPath, "utf8");
   const parsed = parseDngFile(JSON.parse(dngText));
-
   const remapped = remapDngFileToText(parsed, sourceText);
-  await writeFile(dngPath, JSON.stringify(remapped, null, 2) + "\n", "utf8");
+  await writeFile(sidecarAbsPath, JSON.stringify(remapped, null, 2) + "\n", "utf8");
 }
+

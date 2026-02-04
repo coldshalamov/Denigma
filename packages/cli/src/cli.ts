@@ -8,6 +8,7 @@ import { syncAll } from "./sync-all.js";
 import { getRepoStatus } from "./status.js";
 import { trackFile } from "./track.js";
 import { doctorRepo } from "./doctor.js";
+import { trackAll } from "./track-all.js";
 
 export function createProgram(): Command {
   const program = new Command();
@@ -17,9 +18,11 @@ export function createProgram(): Command {
     .command("init")
     .description("Initialize Denigma metadata in the target repo")
     .option("--dir <path>", "Repo root (default: cwd)")
-    .action(async (opts: { dir?: string }) => {
+    .option("--store <store>", "Storage format: dng or denigma (default: dng)", "dng")
+    .action(async (opts: { dir?: string; store?: string }) => {
       const repoRoot = resolve(opts.dir ?? process.cwd());
-      await initRepo(repoRoot);
+      const store = opts.store === "denigma" ? "denigma" : "dng";
+      await initRepo(repoRoot, store);
       process.stdout.write(`Initialized Denigma in ${repoRoot}\n`);
     });
 
@@ -32,6 +35,17 @@ export function createProgram(): Command {
       const repoRoot = resolve(opts.dir ?? process.cwd());
       const created = await trackFile(repoRoot, file);
       process.stdout.write(`Tracked ${file} -> ${created}\n`);
+    });
+
+  program
+    .command("track-all")
+    .description("Track all supported source files in a repo")
+    .option("--dir <path>", "Repo root (default: cwd)")
+    .action(async (opts: { dir?: string }) => {
+      const repoRoot = resolve(opts.dir ?? process.cwd());
+      const result = await trackAll(repoRoot);
+      process.stdout.write(`Tracked ${result.tracked}/${result.total} files (errors: ${result.errors})\n`);
+      process.exitCode = result.errors > 0 ? 2 : 0;
     });
 
   program

@@ -1,4 +1,4 @@
-import { parseDngFile, type DngFile } from "@denigma/core";
+import { parseDngFile, parseTextSidecarFile, textSidecarToDngFile, type DngFile } from "@denigma/core";
 import type { ApiFileResponse, ApiFilesResponse } from "./types";
 
 type GithubTreeEntry = { path: string; type: "blob" | "tree"; sha: string };
@@ -138,23 +138,33 @@ async function getBlobTextCached(state: GithubRepoState, sha: string): Promise<s
 export async function listDenigmaFiles(state: GithubRepoState): Promise<ApiFilesResponse> {
   const basePrefix = state.config.baseDir ? `${state.config.baseDir.replace(/\/+$/, "")}/` : "";
   const denigmaPrefix = `${basePrefix}.denigma/files/`;
-  const dngPaths = Array.from(state.blobs.keys()).filter((p) => p.startsWith(denigmaPrefix) && p.endsWith(".dng.json"));
+  const dngStorePrefix = `${basePrefix}.dng/`;
+
+  const denigmaJsonPaths = Array.from(state.blobs.keys()).filter(
+    (p) => p.startsWith(denigmaPrefix) && p.endsWith(".dng.json"),
+  );
+  const dngTextPaths = Array.from(state.blobs.keys()).filter((p) => p.startsWith(dngStorePrefix) && p.endsWith(".dng"));
 
   state.sourceToDngPath.clear();
 
   const files: ApiFilesResponse["files"] = [];
-  for (const dngPath of dngPaths) {
+  for (const dngPath of [...denigmaJsonPaths, ...dngTextPaths]) {
     const sha = state.blobs.get(dngPath);
     if (!sha) continue;
     try {
       const text = await getBlobTextCached(state, sha);
-      const parsed = parseDngFile(JSON.parse(text));
+      const parsed =
+        dngPath.endsWith(".dng")
+          ? (() => {
+              const sidecar = parseTextSidecarFile(text);
+              if (!sidecar) throw new Error("Invalid .dng sidecar");
+              // For listing we rely on meta/segment status; source text isn't required.
+              return textSidecarToDngFile(sidecar, "");
+            })()
+          : parseDngFile(JSON.parse(text));
+
       state.sourceToDngPath.set(parsed.sourcePath, dngPath);
-      files.push({
-        sourcePath: parsed.sourcePath,
-        updatedAt: parsed.updatedAt,
-        segmentStatus: computeSegmentStatusCounts(parsed),
-      });
+      files.push({ sourcePath: parsed.sourcePath, updatedAt: parsed.updatedAt, segmentStatus: computeSegmentStatusCounts(parsed) });
     } catch {
       // Skip unreadable entries.
     }
@@ -172,11 +182,29 @@ export async function getDenigmaFile(state: GithubRepoState, sourcePath: string)
   if (!dngSha) throw new Error("Missing .dng blob in tree");
 
   const dngText = await getBlobTextCached(state, dngSha);
-  const dng = parseDngFile(JSON.parse(dngText));
+  const dng =
+    dngPath.endsWith(".dng")
+      ? (() => {
+          const sidecar = parseTextSidecarFile(dngText);
+          if (!sidecar) throw new Error("Invalid .dng sidecar");
+          // We'll fill in correct hashes/ranges once sourceText is loaded below if needed.
+          return textSidecarToDngFile(sidecar, "");
+        })()
+      : parseDngFile(JSON.parse(dngText));
 
   const sourceSha = state.blobs.get(sourcePath);
   if (!sourceSha) throw new Error("Source file not found in repo tree");
   const sourceText = await getBlobTextCached(state, sourceSha);
 
-  return { sourcePath, sourceText, dng };
+  return {
+    sourcePath,
+    sourceText,
+    dng: dngPath.endsWith(".dng")
+      ? (() => {
+          const sidecar = parseTextSidecarFile(dngText);
+          if (!sidecar) throw new Error("Invalid .dng sidecar");
+          return textSidecarToDngFile(sidecar, sourceText);
+        })()
+      : dng,
+  };
 }

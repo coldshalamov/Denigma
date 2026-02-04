@@ -2,11 +2,10 @@ import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { parseDngFile } from "@denigma/core";
+import { parseTextSidecarFile } from "@denigma/core";
 import { initRepo } from "../src/repo.js";
 import { trackFile } from "../src/track.js";
 import { syncAll } from "../src/sync-all.js";
-import { encodeRepoRelativePathToDngName } from "../src/paths.js";
 
 describe("sync-all", () => {
   test("re-anchors all tracked files", async () => {
@@ -24,11 +23,10 @@ describe("sync-all", () => {
     expect(res.total).toBe(1);
     expect(res.updated).toBe(1);
 
-    const dngPath = join(dir, ".denigma", "files", encodeRepoRelativePathToDngName(sourceRel));
+    const dngPath = join(dir, ".dng", "src", "a.ts.dng");
     const dngText = await readFile(dngPath, "utf8");
-    const dng = parseDngFile(JSON.parse(dngText));
-    expect(dng.segments[0]?.status).toBe("ok");
-    expect(dng.segments[0]?.range.startLine).toBe(2);
+    const dng = parseTextSidecarFile(dngText);
+    expect(dng?.segments[0]?.status).toBe("ok");
+    expect(dng?.segments[0]?.range.startLine).toBe(2);
   });
 });
-

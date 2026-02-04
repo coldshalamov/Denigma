@@ -1,7 +1,16 @@
 import fg from "fast-glob";
 import { readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { parseDngFile, remapDngFileToText, type DngFile } from "@denigma/core";
+import {
+  dngFileToTextSidecarFile,
+  formatTextSidecarFile,
+  parseDngFile,
+  parseTextSidecarFile,
+  remapDngFileToText,
+  textSidecarToDngFile,
+  type DngFile,
+} from "@denigma/core";
+import { detectRepoStore, listDngSidecars } from "./store.js";
 
 export type SyncAllResult = {
   total: number;
@@ -12,13 +21,18 @@ export type SyncAllResult = {
 
 export async function syncAll(repoRoot: string): Promise<SyncAllResult> {
   const absRepoRoot = resolve(repoRoot);
-  const denigmaFilesDir = join(absRepoRoot, ".denigma", "files");
+  const store = await detectRepoStore(absRepoRoot);
 
   let entries: string[] = [];
-  try {
-    entries = await fg("**/*.dng.json", { cwd: denigmaFilesDir, dot: false, onlyFiles: true, absolute: true });
-  } catch {
-    entries = [];
+  if (store === "dng") {
+    entries = await listDngSidecars(absRepoRoot);
+  } else {
+    const denigmaFilesDir = join(absRepoRoot, ".denigma", "files");
+    try {
+      entries = await fg("**/*.dng.json", { cwd: denigmaFilesDir, dot: false, onlyFiles: true, absolute: true });
+    } catch {
+      entries = [];
+    }
   }
 
   let updated = 0;
@@ -29,7 +43,13 @@ export async function syncAll(repoRoot: string): Promise<SyncAllResult> {
     let dng: DngFile;
     try {
       const dngText = await readFile(dngAbsPath, "utf8");
-      dng = parseDngFile(JSON.parse(dngText));
+      if (store === "dng") {
+        const sidecar = parseTextSidecarFile(dngText);
+        if (!sidecar) throw new Error("Invalid .dng sidecar");
+        dng = textSidecarToDngFile(sidecar, "");
+      } else {
+        dng = parseDngFile(JSON.parse(dngText));
+      }
     } catch {
       parseErrors++;
       continue;
@@ -45,10 +65,13 @@ export async function syncAll(repoRoot: string): Promise<SyncAllResult> {
     }
 
     const remapped = remapDngFileToText(dng, sourceText);
-    await writeFile(dngAbsPath, JSON.stringify(remapped, null, 2) + "\n", "utf8");
+    if (store === "dng") {
+      await writeFile(dngAbsPath, formatTextSidecarFile(dngFileToTextSidecarFile(remapped)), "utf8");
+    } else {
+      await writeFile(dngAbsPath, JSON.stringify(remapped, null, 2) + "\n", "utf8");
+    }
     updated++;
   }
 
   return { total: entries.length, updated, missingSource, parseErrors };
 }
-

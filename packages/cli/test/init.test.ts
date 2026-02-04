@@ -5,10 +5,20 @@ import { describe, expect, test } from "vitest";
 import { initRepo } from "../src/repo.js";
 
 describe("initRepo", () => {
-  test("creates .denigma/denigma.json", async () => {
+  test("creates .dng/ by default", async () => {
     const dir = await mkdtemp(join(tmpdir(), "denigma-init-"));
 
     await initRepo(dir);
+
+    const dngDir = join(dir, ".dng");
+    const s = await stat(dngDir);
+    expect(s.isDirectory()).toBe(true);
+  });
+
+  test("creates legacy .denigma/denigma.json when requested", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "denigma-init-legacy-"));
+
+    await initRepo(dir, "denigma");
 
     const configPath = join(dir, ".denigma", "denigma.json");
     const fileStat = await stat(configPath);
@@ -19,4 +29,3 @@ describe("initRepo", () => {
     expect(parsed.schemaVersion).toBe(1);
   });
 });
-

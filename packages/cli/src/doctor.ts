@@ -1,7 +1,8 @@
 import fg from "fast-glob";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { parseDngFile, sha256Hex, type DngFile } from "@denigma/core";
+import { parseDngFile, parseTextSidecarFile, sha256Hex, textSidecarToDngFile, type DngFile } from "@denigma/core";
+import { detectRepoStore, listDngSidecars } from "./store.js";
 
 export type DoctorReport = {
   repoRoot: string;
@@ -27,13 +28,17 @@ function countSegments(dng: DngFile): { missing: number; ambiguous: number } {
 
 export async function doctorRepo(repoRoot: string): Promise<DoctorReport> {
   const absRepoRoot = resolve(repoRoot);
-  const denigmaFilesDir = join(absRepoRoot, ".denigma", "files");
-
+  const store = await detectRepoStore(absRepoRoot);
   let entries: string[] = [];
-  try {
-    entries = await fg("**/*.dng.json", { cwd: denigmaFilesDir, dot: false, onlyFiles: true, absolute: true });
-  } catch {
-    entries = [];
+  if (store === "dng") {
+    entries = await listDngSidecars(absRepoRoot);
+  } else {
+    const denigmaFilesDir = join(absRepoRoot, ".denigma", "files");
+    try {
+      entries = await fg("**/*.dng.json", { cwd: denigmaFilesDir, dot: false, onlyFiles: true, absolute: true });
+    } catch {
+      entries = [];
+    }
   }
 
   let trackedFiles = 0;
@@ -47,7 +52,14 @@ export async function doctorRepo(repoRoot: string): Promise<DoctorReport> {
     let dng: DngFile;
     try {
       const text = await readFile(filePath, "utf8");
-      dng = parseDngFile(JSON.parse(text));
+      if (store === "dng") {
+        const sidecar = parseTextSidecarFile(text);
+        if (!sidecar) throw new Error("Invalid .dng sidecar");
+        // We only need metadata/segments to run validations below; sourceHash comparisons read source directly.
+        dng = textSidecarToDngFile(sidecar, "");
+      } else {
+        dng = parseDngFile(JSON.parse(text));
+      }
     } catch {
       parseErrors++;
       continue;
@@ -87,4 +99,3 @@ export async function doctorRepo(repoRoot: string): Promise<DoctorReport> {
     ok,
   };
 }
-

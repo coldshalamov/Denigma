@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { RepoStoreKind } from "./store.js";
 
 export type DenigmaRepoConfig = {
   schemaVersion: 1;
@@ -8,7 +9,12 @@ export type DenigmaRepoConfig = {
   filesDir: string;
 };
 
-export async function initRepo(repoRoot: string): Promise<void> {
+export async function initRepo(repoRoot: string, store: RepoStoreKind = "dng"): Promise<void> {
+  if (store === "dng") {
+    await mkdir(join(repoRoot, ".dng"), { recursive: true });
+    return;
+  }
+
   const denigmaDir = join(repoRoot, ".denigma");
   await mkdir(denigmaDir, { recursive: true });
   await mkdir(join(denigmaDir, "files"), { recursive: true });
@@ -24,4 +30,3 @@ export async function initRepo(repoRoot: string): Promise<void> {
   const configPath = join(denigmaDir, "denigma.json");
   await writeFile(configPath, JSON.stringify(config, null, 2) + "\n", "utf8");
 }
-

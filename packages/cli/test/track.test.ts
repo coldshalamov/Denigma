@@ -2,12 +2,12 @@ import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { parseDngFile } from "@denigma/core";
+import { parseTextSidecarFile } from "@denigma/core";
 import { initRepo } from "../src/repo.js";
 import { trackFile } from "../src/track.js";
 
 describe("trackFile", () => {
-  test("creates a .dng file in .denigma/files", async () => {
+  test("creates a .dng sidecar file in .dng/ (mirrored)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "denigma-track-"));
     await initRepo(dir);
 
@@ -18,10 +18,11 @@ describe("trackFile", () => {
 
     const createdPath = await trackFile(dir, sourceRel);
     const dngText = await readFile(createdPath, "utf8");
-    const dng = parseDngFile(JSON.parse(dngText));
+    const parsed = parseTextSidecarFile(dngText);
 
-    expect(dng.sourcePath).toBe(sourceRel);
-    expect(dng.segments.length).toBeGreaterThan(0);
+    expect(createdPath).toContain(join(dir, ".dng"));
+    expect(parsed?.meta.sourcePath).toBe(sourceRel);
+    expect(parsed?.segments.length).toBeGreaterThan(0);
   });
 
   test("rejects path traversal", async () => {

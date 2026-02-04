@@ -1,24 +1,31 @@
-import { readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { createDngFile } from "@denigma/core";
-import { encodeRepoRelativePathToDngName, normalizeRepoRelativePath } from "./paths.js";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { createDngFile, dngFileToTextSidecarFile, formatTextSidecarFile } from "@denigma/core";
+import { normalizeRepoRelativePath } from "./paths.js";
 import { scanSegments } from "./scan.js";
+import { denigmaSidecarPath, detectRepoStore, dngSidecarPath } from "./store.js";
 
 export async function trackFile(repoRoot: string, sourceRepoRelativePath: string): Promise<string> {
   const normalizedSourcePath = normalizeRepoRelativePath(sourceRepoRelativePath);
-  const denigmaFilesDir = join(repoRoot, ".denigma", "files");
-  const dngName = encodeRepoRelativePathToDngName(normalizedSourcePath);
-  const dngPath = join(denigmaFilesDir, dngName);
+  const store = await detectRepoStore(repoRoot);
+  const sidecarPath = store === "dng" ? dngSidecarPath(repoRoot, normalizedSourcePath) : denigmaSidecarPath(repoRoot, normalizedSourcePath);
 
-  const sourcePath = join(repoRoot, normalizedSourcePath);
-  const sourceText = await readFile(sourcePath, "utf8");
+  const sourceAbsPath = join(repoRoot, ...normalizedSourcePath.split("/"));
+  const sourceText = await readFile(sourceAbsPath, "utf8");
 
   const dng = createDngFile({
     sourcePath: normalizedSourcePath,
     sourceText,
-    segments: scanSegments(sourceText),
+    segments: scanSegments(sourceText, normalizedSourcePath),
   });
 
-  await writeFile(dngPath, JSON.stringify(dng, null, 2) + "\n", "utf8");
-  return dngPath;
+  if (store === "dng") {
+    await mkdir(dirname(sidecarPath), { recursive: true });
+    const text = formatTextSidecarFile(dngFileToTextSidecarFile(dng));
+    await writeFile(sidecarPath, text, "utf8");
+    return sidecarPath;
+  }
+
+  await writeFile(sidecarPath, JSON.stringify(dng, null, 2) + "\n", "utf8");
+  return sidecarPath;
 }

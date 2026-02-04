@@ -1,9 +1,18 @@
 import express from "express";
 import cors from "cors";
 import fg from "fast-glob";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { join, resolve, posix as posixPath, sep as pathSep } from "node:path";
-import { parseDngFile, remapDngFileToText, type DngFile } from "@denigma/core";
+import {
+  dngFileToTextSidecarFile,
+  formatTextSidecarFile,
+  parseDngFile,
+  parseTextSidecarFile,
+  remapDngFileToText,
+  textSidecarToDngFile,
+  type DngFile,
+} from "@denigma/core";
 import { z } from "zod";
 
 export type CreateDenigmaServerOptions = {
@@ -45,7 +54,17 @@ function computeSegmentStatusCounts(dng: DngFile): { ok: number; missing: number
 
 export function createDenigmaServer(options: CreateDenigmaServerOptions): express.Express {
   const repoRoot = resolve(options.repoRoot);
+  const dngDir = join(repoRoot, ".dng");
   const denigmaFilesDir = join(repoRoot, ".denigma", "files");
+  const store: "dng" | "denigma" = existsSync(dngDir) ? "dng" : "denigma";
+
+  function sidecarPathForSource(normalizedSourcePath: string): string {
+    if (store === "dng") {
+      const parts = normalizedSourcePath.split("/").join(pathSep);
+      return join(dngDir, parts) + ".dng";
+    }
+    return join(denigmaFilesDir, encodeRepoRelativePathToDngName(normalizedSourcePath));
+  }
 
   const app = express();
   app.use(cors());
@@ -53,16 +72,24 @@ export function createDenigmaServer(options: CreateDenigmaServerOptions): expres
 
   app.get("/api/files", async (_req, res) => {
     let entries: string[] = [];
-    try {
-      entries = await fg("**/*.dng.json", {
-        cwd: denigmaFilesDir,
-        dot: false,
-        onlyFiles: true,
-        absolute: true,
-      });
-    } catch {
-      // If .denigma/files doesn't exist yet, return empty list.
-      entries = [];
+    if (store === "dng") {
+      try {
+        entries = await fg("**/*.dng", { cwd: dngDir, dot: true, onlyFiles: true, absolute: true });
+      } catch {
+        entries = [];
+      }
+    } else {
+      try {
+        entries = await fg("**/*.dng.json", {
+          cwd: denigmaFilesDir,
+          dot: false,
+          onlyFiles: true,
+          absolute: true,
+        });
+      } catch {
+        // If .denigma/files doesn't exist yet, return empty list.
+        entries = [];
+      }
     }
 
     const files: Array<{
@@ -74,7 +101,14 @@ export function createDenigmaServer(options: CreateDenigmaServerOptions): expres
     for (const filePath of entries) {
       try {
         const text = await readFile(filePath, "utf8");
-        const parsed = parseDngFile(JSON.parse(text));
+        const parsed =
+          store === "dng"
+            ? (() => {
+                const sidecar = parseTextSidecarFile(text);
+                if (!sidecar) throw new Error("Invalid .dng sidecar");
+                return textSidecarToDngFile(sidecar, "");
+              })()
+            : parseDngFile(JSON.parse(text));
         files.push({
           sourcePath: parsed.sourcePath,
           updatedAt: parsed.updatedAt,
@@ -96,11 +130,17 @@ export function createDenigmaServer(options: CreateDenigmaServerOptions): expres
       return;
     }
 
-    const dngPath = join(denigmaFilesDir, encodeRepoRelativePathToDngName(normalizedSourcePath));
+    const dngPath = sidecarPathForSource(normalizedSourcePath);
     let dng: DngFile;
     try {
       const dngText = await readFile(dngPath, "utf8");
-      dng = parseDngFile(JSON.parse(dngText));
+      if (store === "dng") {
+        const sidecar = parseTextSidecarFile(dngText);
+        if (!sidecar) throw new Error("Invalid .dng sidecar");
+        dng = textSidecarToDngFile(sidecar, "");
+      } else {
+        dng = parseDngFile(JSON.parse(dngText));
+      }
     } catch {
       res.status(404).json({ error: "No .dng file found for path" });
       return;
@@ -136,8 +176,13 @@ export function createDenigmaServer(options: CreateDenigmaServerOptions): expres
       res.status(400).json({ error: "Body dng.sourcePath must match query param: path" });
       return;
     }
-    const dngPath = join(denigmaFilesDir, encodeRepoRelativePathToDngName(normalizedSourcePath));
-    await writeFile(dngPath, JSON.stringify(dng, null, 2) + "\n", "utf8");
+    const dngPath = sidecarPathForSource(normalizedSourcePath);
+    if (store === "dng") {
+      await mkdir(join(dngDir, ...normalizedSourcePath.split("/").slice(0, -1)), { recursive: true });
+      await writeFile(dngPath, formatTextSidecarFile(dngFileToTextSidecarFile(dng)), "utf8");
+    } else {
+      await writeFile(dngPath, JSON.stringify(dng, null, 2) + "\n", "utf8");
+    }
     res.json({ ok: true });
   });
 
@@ -148,11 +193,17 @@ export function createDenigmaServer(options: CreateDenigmaServerOptions): expres
       return;
     }
 
-    const dngPath = join(denigmaFilesDir, encodeRepoRelativePathToDngName(normalizedSourcePath));
+    const dngPath = sidecarPathForSource(normalizedSourcePath);
     let dng: DngFile;
     try {
       const dngText = await readFile(dngPath, "utf8");
-      dng = parseDngFile(JSON.parse(dngText));
+      if (store === "dng") {
+        const sidecar = parseTextSidecarFile(dngText);
+        if (!sidecar) throw new Error("Invalid .dng sidecar");
+        dng = textSidecarToDngFile(sidecar, "");
+      } else {
+        dng = parseDngFile(JSON.parse(dngText));
+      }
     } catch {
       res.status(404).json({ error: "No .dng file found for path" });
       return;
@@ -168,7 +219,11 @@ export function createDenigmaServer(options: CreateDenigmaServerOptions): expres
     }
 
     const remapped = remapDngFileToText(dng, sourceText);
-    await writeFile(dngPath, JSON.stringify(remapped, null, 2) + "\n", "utf8");
+    if (store === "dng") {
+      await writeFile(dngPath, formatTextSidecarFile(dngFileToTextSidecarFile(remapped)), "utf8");
+    } else {
+      await writeFile(dngPath, JSON.stringify(remapped, null, 2) + "\n", "utf8");
+    }
     res.json({ ok: true, dng: remapped });
   });
 
