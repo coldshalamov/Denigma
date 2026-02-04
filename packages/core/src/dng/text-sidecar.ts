@@ -17,7 +17,7 @@ export type TextSidecarSegment = {
   range: DngRange;
   markdown: string;
   status: NonNullable<DngSegment["status"]>;
-  anchor: DngAnchor;
+  anchor?: DngAnchor;
 };
 
 export type TextSidecarFile = {
@@ -89,18 +89,13 @@ function formatMetaLine(meta: TextSidecarMeta): string {
   );
 }
 
-function parseSegmentHeader(line: string): {
-  id: string;
-  range: DngRange;
-  status: NonNullable<DngSegment["status"]>;
-  anchor: DngAnchor;
-} | null {
+function parseSegmentHeaderLine(
+  line: string,
+): { id: string; range: DngRange; meta?: { status?: NonNullable<DngSegment["status"]>; anchor?: DngAnchor } } | null {
   if (!line.startsWith("@@")) return null;
   if (line.startsWith("@@@")) return null;
   const rest = line.slice(2).trim();
 
-  // Expected tokens:
-  // @@ seg-1 L10-L42 S:ok A:<b64url>
   const tokens = rest.split(/\s+/g);
   if (tokens.length < 2) return null;
   const id = tokens[0] || "";
@@ -111,41 +106,62 @@ function parseSegmentHeader(line: string): {
   const endLine = Number(rangeMatch[2]);
   if (!Number.isFinite(startLine) || !Number.isFinite(endLine) || startLine <= 0 || endLine <= 0) return null;
 
-  let status: NonNullable<DngSegment["status"]> = "ok";
-  let anchor: DngAnchor | null = null;
+  const meta = parseSegmentMetaFromTokens(tokens.slice(2));
+  const hasMeta = Boolean(meta.status || meta.anchor);
 
-  for (const t of tokens.slice(2)) {
+  return {
+    id,
+    range: { startLine, startCol: 0, endLine, endCol: 0 },
+    ...(hasMeta ? { meta } : {}),
+  };
+}
+
+function parseSegmentMetaFromTokens(tokens: string[]): { status?: NonNullable<DngSegment["status"]>; anchor?: DngAnchor } {
+  let status: NonNullable<DngSegment["status"]> | undefined;
+  let anchor: DngAnchor | undefined;
+  for (const t of tokens) {
     if (t.startsWith("S:")) {
       const s = t.slice(2);
       if (s === "missing" || s === "ambiguous") status = s;
-      else status = "ok";
+      else if (s === "ok") status = "ok";
     } else if (t.startsWith("A:")) {
       const payload = t.slice(2);
-      if (payload) {
-        try {
-          const json = base64UrlDecodeToString(payload);
-          anchor = JSON.parse(json) as DngAnchor;
-        } catch {
-          // ignore
-        }
+      if (!payload) continue;
+      try {
+        const json = base64UrlDecodeToString(payload);
+        anchor = JSON.parse(json) as DngAnchor;
+      } catch {
+        // ignore
       }
     }
   }
 
-  if (!anchor) return null;
-  return {
-    id,
-    range: { startLine, startCol: 0, endLine, endCol: 0 },
-    status,
-    anchor,
-  };
+  const out: { status?: NonNullable<DngSegment["status"]>; anchor?: DngAnchor } = {};
+  if (status) out.status = status;
+  if (anchor) out.anchor = anchor;
+  return out;
 }
 
-function formatSegmentHeader(segment: TextSidecarSegment): string {
-  const payload = base64UrlEncode(JSON.stringify(segment.anchor));
-  const statusToken = `S:${segment.status}`;
-  const anchorToken = `A:${payload}`;
-  return `@@ ${segment.id} L${segment.range.startLine}-L${segment.range.endLine} ${statusToken} ${anchorToken}`;
+function parseSegmentMetaLine(line: string): { status?: NonNullable<DngSegment["status"]>; anchor?: DngAnchor } | null {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("<!--") || !trimmed.endsWith("-->")) return null;
+  const inner = trimmed.slice(4, -3).trim();
+  if (!inner.startsWith("denigma")) return null;
+  const tokens = inner.split(/\s+/g).slice(1); // drop 'denigma'
+  return parseSegmentMetaFromTokens(tokens);
+}
+
+function formatSegmentHeaderLine(segment: TextSidecarSegment): string {
+  return `@@ ${segment.id} L${segment.range.startLine}-L${segment.range.endLine}`;
+}
+
+function formatSegmentMetaLine(segment: TextSidecarSegment): string {
+  const parts: string[] = [`S:${segment.status}`];
+  if (segment.anchor) {
+    const payload = base64UrlEncode(JSON.stringify(segment.anchor));
+    parts.push(`A:${payload}`);
+  }
+  return `<!-- denigma ${parts.join(" ")} -->`;
 }
 
 export function parseTextSidecarFile(content: string): TextSidecarFile | null {
@@ -155,24 +171,60 @@ export function parseTextSidecarFile(content: string): TextSidecarFile | null {
   if (!metaPartial?.sourcePath) return null;
 
   const segments: TextSidecarSegment[] = [];
-  let current: ReturnType<typeof parseSegmentHeader> | null = null;
+  let currentHeader: { id: string; range: DngRange } | null = null;
+  let currentMeta: { status: NonNullable<DngSegment["status"]>; anchor?: DngAnchor } | null = null;
+  let expectingMetaLine = false;
   let buf: string[] = [];
 
   const flush = () => {
-    if (!current) return;
+    if (!currentHeader) return;
+    const meta = currentMeta ?? { status: "missing" as const };
     const markdown = buf.join("\n").trimEnd();
-    segments.push({ ...current, markdown });
+    segments.push({ ...currentHeader, ...meta, markdown });
     buf = [];
   };
 
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i] ?? "";
-    const header = parseSegmentHeader(line);
+    const header = parseSegmentHeaderLine(line);
     if (header) {
       flush();
-      current = header;
+      currentHeader = { id: header.id, range: header.range };
+      if (header.meta) {
+        const meta: { status: NonNullable<DngSegment["status"]>; anchor?: DngAnchor } = {
+          status: header.meta.status ?? "ok",
+        };
+        if (header.meta.anchor) meta.anchor = header.meta.anchor;
+        currentMeta = meta;
+        expectingMetaLine = false;
+      } else {
+        currentMeta = null;
+        expectingMetaLine = true;
+      }
       continue;
     }
+
+    if (expectingMetaLine) {
+      // New format: metadata in an HTML comment line after the @@ header.
+      const meta = parseSegmentMetaLine(line);
+      if (meta) {
+        const current: { status: NonNullable<DngSegment["status"]>; anchor?: DngAnchor } = {
+          status: meta.status ?? "ok",
+        };
+        if (meta.anchor) current.anchor = meta.anchor;
+        currentMeta = current;
+        expectingMetaLine = false;
+        continue;
+      }
+
+      // No meta line present. Treat the segment as "unsynced"; we can still render it,
+      // and anchors can be (re)generated from sourceText when converting to a DngFile.
+      currentMeta = { status: "missing" };
+      expectingMetaLine = false;
+      buf.push(line);
+      continue;
+    }
+
     buf.push(line);
   }
   flush();
@@ -198,7 +250,8 @@ export function formatTextSidecarFile(file: TextSidecarFile): string {
   out.push(formatMetaLine(file.meta));
   out.push("");
   for (const seg of file.segments) {
-    out.push(formatSegmentHeader(seg));
+    out.push(formatSegmentHeaderLine(seg));
+    out.push(formatSegmentMetaLine(seg));
     out.push(seg.markdown.trimEnd());
     out.push("");
   }

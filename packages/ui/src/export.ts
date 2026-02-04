@@ -70,6 +70,11 @@ export function exportFilenameForSourcePath(sourcePath: string): string {
   return `${base}.denigma.md`;
 }
 
+export function sidecarFilenameForSourcePath(sourcePath: string, store: "dng" | "denigma"): string {
+  const base = escapeFilenamePart(sourcePath.replaceAll("\\", "/").replaceAll("/", "__"));
+  return store === "dng" ? `${base}.dng` : `${base}.dng.json`;
+}
+
 export function downloadTextFile(filename: string, contents: string): void {
   const blob = new Blob([contents], { type: "text/markdown;charset=utf-8" });
   const url = URL.createObjectURL(blob);

@@ -1,13 +1,27 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import type { ApiFileResponse, ApiFilesResponse, EditableSegment } from "./types";
-import { downloadTextFile, exportFilenameForSourcePath, generateMarkdownExport } from "./export";
+import {
+  downloadTextFile,
+  exportFilenameForSourcePath,
+  generateMarkdownExport,
+  sidecarFilenameForSourcePath,
+} from "./export";
 import { cycleIndex, findLineMatches, normalizeQuery } from "./search";
 
 function splitLines(text: string): string[] {
   return text.split(/\r?\n/);
 }
+
+type MarkdownProps = { markdown: string };
+
+const Markdown = lazy(async () => {
+  const [{ default: ReactMarkdown }, { default: remarkGfm }] = await Promise.all([
+    import("react-markdown"),
+    import("remark-gfm"),
+  ]);
+  const Component = ({ markdown }: MarkdownProps) => <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>;
+  return { default: Component };
+});
 
 type Loadable<T> =
   | { status: "idle" }
@@ -17,6 +31,7 @@ type Loadable<T> =
 
 type ViewMode = "range" | "inline";
 type EditorTab = "edit" | "preview";
+type StatusFilter = "all" | "attention" | "ok" | "missing" | "ambiguous";
 
 function segmentStatus(s?: EditableSegment["status"]): "ok" | "missing" | "ambiguous" {
   if (s === "missing") return "missing";
@@ -27,6 +42,7 @@ function segmentStatus(s?: EditableSegment["status"]): "ok" | "missing" | "ambig
 export function App() {
   const [files, setFiles] = useState<Loadable<ApiFilesResponse>>({ status: "idle" });
   const [fileFilter, setFileFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [activePath, setActivePath] = useState<string>("");
   const [activeFile, setActiveFile] = useState<Loadable<ApiFileResponse>>({ status: "idle" });
   const [activeSegmentId, setActiveSegmentId] = useState<string>("");
@@ -36,6 +52,7 @@ export function App() {
   const [viewMode, setViewMode] = useState<ViewMode>("range");
   const [editorTab, setEditorTab] = useState<EditorTab>("edit");
   const [notice, setNotice] = useState<string>("");
+  const [store, setStore] = useState<"dng" | "denigma">("denigma");
   const [codeQuery, setCodeQuery] = useState("");
   const [matchIndex, setMatchIndex] = useState(-1);
 
@@ -57,6 +74,23 @@ export function App() {
       } catch (e) {
         const message = e instanceof Error ? e.message : "Unknown error";
         if (!cancelled) setFiles({ status: "error", message });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/meta");
+        if (!res.ok) return;
+        const data = (await res.json()) as { store?: "dng" | "denigma" };
+        if (!cancelled && (data.store === "dng" || data.store === "denigma")) setStore(data.store);
+      } catch {
+        // ignore
       }
     })();
     return () => {
@@ -126,6 +160,16 @@ export function App() {
     if (!q) return files.data.files;
     return files.data.files.filter((f) => f.sourcePath.toLowerCase().includes(q));
   }, [files, fileFilter]);
+
+  const visibleFiles = useMemo(() => {
+    if (files.status !== "ready") return [];
+    const base = filteredFiles;
+    if (statusFilter === "all") return base;
+    if (statusFilter === "attention") return base.filter((f) => f.segmentStatus.missing + f.segmentStatus.ambiguous > 0);
+    if (statusFilter === "ok") return base.filter((f) => f.segmentStatus.missing + f.segmentStatus.ambiguous === 0);
+    if (statusFilter === "missing") return base.filter((f) => f.segmentStatus.missing > 0);
+    return base.filter((f) => f.segmentStatus.ambiguous > 0);
+  }, [files.status, filteredFiles, statusFilter]);
 
   useEffect(() => {
     if (!activeSegment) return;
@@ -225,6 +269,33 @@ export function App() {
     downloadTextFile(exportFilenameForSourcePath(activeFile.data.sourcePath), md);
   }
 
+  async function exportSidecar(): Promise<void> {
+    if (!activePath) return;
+    setNotice("");
+    try {
+      const res = await fetch(`/api/sidecar?path=${encodeURIComponent(activePath)}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+      const filename = sidecarFilenameForSourcePath(activePath, store);
+
+      const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+
+      setNotice("Sidecar downloaded.");
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Unknown error";
+      setNotice(`Sidecar download failed: ${message}`);
+    }
+  }
+
   const inlineBlocksByStartLine = useMemo(() => {
     const map = new Map<number, EditableSegment[]>();
     for (const seg of segments) {
@@ -244,7 +315,9 @@ export function App() {
           <span className="muted">semantic sidecar for codebases</span>
         </div>
         <div className="topbarMeta">
-          <div className="muted">{activePath ? activePath : "No file selected"}</div>
+          <div className="muted">
+            {activePath ? activePath : "No file selected"} · store: {store === "dng" ? ".dng" : ".denigma"}
+          </div>
           <div className="topbarActions">
             <button
               className={`toolBtn ${viewMode === "range" ? "toolBtnActive" : ""}`}
@@ -262,6 +335,9 @@ export function App() {
             </button>
             <button className="toolBtn" onClick={() => exportMarkdown()} disabled={activeFile.status !== "ready"}>
               Export
+            </button>
+            <button className="toolBtn" onClick={() => void exportSidecar()} disabled={!activePath}>
+              Sidecar
             </button>
             <button className="toolBtn" onClick={() => void syncNow()} disabled={!activePath || syncing}>
               {syncing ? "Syncing…" : "Sync"}
@@ -291,11 +367,30 @@ export function App() {
               aria-label="Filter files"
             />
             <div className="spacer8" />
+            <div className="row">
+              <label className="muted" htmlFor="statusFilter">
+                Status
+              </label>
+              <select
+                id="statusFilter"
+                className="select"
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+                aria-label="Filter by status"
+              >
+                <option value="all">All</option>
+                <option value="attention">Attention</option>
+                <option value="ok">OK</option>
+                <option value="missing">Missing</option>
+                <option value="ambiguous">Ambiguous</option>
+              </select>
+            </div>
+            <div className="spacer8" />
             {files.status === "loading" && <div className="muted">Loading…</div>}
             {files.status === "error" && <div>Failed: {files.message}</div>}
             {files.status === "ready" && (
               <div className="filesList">
-                {(filteredFiles satisfies ApiFilesResponse["files"]).map((file) => {
+                {(visibleFiles satisfies ApiFilesResponse["files"]).map((file) => {
                   const active = file.sourcePath === activePath;
                   const missing = file.segmentStatus.missing + file.segmentStatus.ambiguous;
                   return (
@@ -400,9 +495,11 @@ export function App() {
                     placeholder="Write extremely verbose plain-English explanation here…"
                   />
                 ) : (
-                  <div className="markdown markdownPanel" role="tabpanel">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{draftMarkdown || "*No text.*"}</ReactMarkdown>
-                  </div>
+                  <Suspense fallback={<div className="muted">Loading preview…</div>}>
+                    <div className="markdown markdownPanel" role="tabpanel">
+                      <Markdown markdown={draftMarkdown || "*No text.*"} />
+                    </div>
+                  </Suspense>
                 )}
 
                 {notice ? <div className="notice">{notice}</div> : null}
@@ -483,9 +580,11 @@ export function App() {
                                     {status}
                                   </span>
                                 </summary>
-                                <div className="markdown inlineExplainBody">
-                                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{seg.markdown}</ReactMarkdown>
-                                </div>
+                                <Suspense fallback={<div className="muted">Loading…</div>}>
+                                  <div className="markdown inlineExplainBody">
+                                    <Markdown markdown={seg.markdown} />
+                                  </div>
+                                </Suspense>
                               </details>
                             );
                           })}

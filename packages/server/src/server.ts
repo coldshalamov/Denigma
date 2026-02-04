@@ -70,6 +70,26 @@ export function createDenigmaServer(options: CreateDenigmaServerOptions): expres
   app.use(cors());
   app.use(express.json({ limit: "5mb" }));
 
+  app.get("/api/meta", async (_req, res) => {
+    res.json({ store });
+  });
+
+  app.get("/api/sidecar", async (req, res) => {
+    const normalizedSourcePath = normalizeRepoRelativePath(String(req.query.path ?? ""));
+    if (!normalizedSourcePath) {
+      res.status(400).json({ error: "Missing required query param: path" });
+      return;
+    }
+
+    const dngPath = sidecarPathForSource(normalizedSourcePath);
+    try {
+      const text = await readFile(dngPath, "utf8");
+      res.type(store === "dng" ? "text/plain" : "application/json").send(text);
+    } catch {
+      res.status(404).json({ error: "No sidecar found for path" });
+    }
+  });
+
   app.get("/api/files", async (_req, res) => {
     let entries: string[] = [];
     if (store === "dng") {
@@ -101,14 +121,26 @@ export function createDenigmaServer(options: CreateDenigmaServerOptions): expres
     for (const filePath of entries) {
       try {
         const text = await readFile(filePath, "utf8");
-        const parsed =
-          store === "dng"
-            ? (() => {
-                const sidecar = parseTextSidecarFile(text);
-                if (!sidecar) throw new Error("Invalid .dng sidecar");
-                return textSidecarToDngFile(sidecar, "");
-              })()
-            : parseDngFile(JSON.parse(text));
+        if (store === "dng") {
+          const sidecar = parseTextSidecarFile(text);
+          if (!sidecar) throw new Error("Invalid .dng sidecar");
+
+          const segmentStatus = { ok: 0, missing: 0, ambiguous: 0 };
+          for (const seg of sidecar.segments) {
+            if (seg.status === "missing") segmentStatus.missing++;
+            else if (seg.status === "ambiguous") segmentStatus.ambiguous++;
+            else segmentStatus.ok++;
+          }
+
+          files.push({
+            sourcePath: sidecar.meta.sourcePath,
+            updatedAt: sidecar.meta.updatedAt,
+            segmentStatus,
+          });
+          continue;
+        }
+
+        const parsed = parseDngFile(JSON.parse(text));
         files.push({
           sourcePath: parsed.sourcePath,
           updatedAt: parsed.updatedAt,
@@ -131,27 +163,27 @@ export function createDenigmaServer(options: CreateDenigmaServerOptions): expres
     }
 
     const dngPath = sidecarPathForSource(normalizedSourcePath);
-    let dng: DngFile;
-    try {
-      const dngText = await readFile(dngPath, "utf8");
-      if (store === "dng") {
-        const sidecar = parseTextSidecarFile(dngText);
-        if (!sidecar) throw new Error("Invalid .dng sidecar");
-        dng = textSidecarToDngFile(sidecar, "");
-      } else {
-        dng = parseDngFile(JSON.parse(dngText));
-      }
-    } catch {
-      res.status(404).json({ error: "No .dng file found for path" });
-      return;
-    }
-
     const sourceAbsPath = join(repoRoot, normalizedSourcePath.split("/").join(pathSep));
     let sourceText: string;
     try {
       sourceText = await readFile(sourceAbsPath, "utf8");
     } catch {
       res.status(404).json({ error: "Source file not found" });
+      return;
+    }
+
+    let dng: DngFile;
+    try {
+      const dngText = await readFile(dngPath, "utf8");
+      if (store === "dng") {
+        const sidecar = parseTextSidecarFile(dngText);
+        if (!sidecar) throw new Error("Invalid .dng sidecar");
+        dng = textSidecarToDngFile(sidecar, sourceText);
+      } else {
+        dng = parseDngFile(JSON.parse(dngText));
+      }
+    } catch {
+      res.status(404).json({ error: "No .dng file found for path" });
       return;
     }
 
@@ -194,27 +226,27 @@ export function createDenigmaServer(options: CreateDenigmaServerOptions): expres
     }
 
     const dngPath = sidecarPathForSource(normalizedSourcePath);
-    let dng: DngFile;
-    try {
-      const dngText = await readFile(dngPath, "utf8");
-      if (store === "dng") {
-        const sidecar = parseTextSidecarFile(dngText);
-        if (!sidecar) throw new Error("Invalid .dng sidecar");
-        dng = textSidecarToDngFile(sidecar, "");
-      } else {
-        dng = parseDngFile(JSON.parse(dngText));
-      }
-    } catch {
-      res.status(404).json({ error: "No .dng file found for path" });
-      return;
-    }
-
     const sourceAbsPath = join(repoRoot, normalizedSourcePath.split("/").join(pathSep));
     let sourceText: string;
     try {
       sourceText = await readFile(sourceAbsPath, "utf8");
     } catch {
       res.status(404).json({ error: "Source file not found" });
+      return;
+    }
+
+    let dng: DngFile;
+    try {
+      const dngText = await readFile(dngPath, "utf8");
+      if (store === "dng") {
+        const sidecar = parseTextSidecarFile(dngText);
+        if (!sidecar) throw new Error("Invalid .dng sidecar");
+        dng = textSidecarToDngFile(sidecar, sourceText);
+      } else {
+        dng = parseDngFile(JSON.parse(dngText));
+      }
+    } catch {
+      res.status(404).json({ error: "No .dng file found for path" });
       return;
     }
 
