@@ -1,0 +1,29 @@
+{
+  "name": "@denigma/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/main.cjs",
+  "scripts": {
+    "build": "tsup",
+    "dev": "concurrently -n ui,desktop -c cyan,green \"npm -w @denigma/ui dev\" \"wait-on http://localhost:5173 && cross-env DENIGMA_DESKTOP_DEV_UI_URL=http://localhost:5173 node dist/main.cjs\"",
+    "lint": "eslint .",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@denigma/server": "0.1.0",
+    "electron-store": "^10.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "electron": "^35.0.0",
+    "tsup": "^8.0.2",
+    "typescript": "^5.7.3",
+    "vitest": "^4.0.18",
+    "wait-on": "^8.0.0"
+  }
+}
+

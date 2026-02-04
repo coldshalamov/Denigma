@@ -1,0 +1,24 @@
+{
+  "name": "@denigma/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "denigma": "./dist/bin.cjs"
+  },
+  "scripts": {
+    "build": "tsup",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@denigma/core": "0.1.0",
+    "@denigma/server": "0.1.0",
+    "commander": "^13.0.0",
+    "fast-glob": "^3.3.2"
+  },
+  "devDependencies": {
+    "tsup": "^8.0.2",
+    "vitest": "^4.0.18"
+  }
+}

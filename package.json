@@ -1,0 +1,27 @@
+{
+  "name": "denigma",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm --workspaces run build",
+    "dev": "npm run build && concurrently -n api,ui -c green,cyan \"node packages/cli/dist/bin.cjs serve --dir . --port 8787\" \"npm -w @denigma/ui dev\"",
+    "dev:web": "npm -w @denigma/web dev",
+    "dev:desktop": "npm -w @denigma/desktop dev",
+    "lint": "npm --workspaces run lint",
+    "format": "prettier -w .",
+    "test": "npm --workspaces run test",
+    "typecheck": "npm --workspaces run typecheck"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@types/node": "^22.10.5",
+    "concurrently": "^9.1.2",
+    "eslint": "^9.17.0",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.19.0"
+  }
+}

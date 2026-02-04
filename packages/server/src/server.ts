@@ -1,0 +1,185 @@
+import express from "express";
+import cors from "cors";
+import fg from "fast-glob";
+import { readFile, writeFile } from "node:fs/promises";
+import { join, resolve, posix as posixPath, sep as pathSep } from "node:path";
+import { parseDngFile, remapDngFileToText, type DngFile } from "@denigma/core";
+import { z } from "zod";
+
+export type CreateDenigmaServerOptions = {
+  repoRoot: string;
+  uiDistDir?: string;
+};
+
+const SaveFileBodySchema = z.object({
+  dng: z.unknown(),
+});
+
+function normalizeRepoRelativePath(input: string): string | null {
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+  if (trimmed.includes("\0")) return null;
+  if (trimmed.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(trimmed)) return null;
+
+  const normalized = posixPath.normalize(trimmed.replaceAll("\\", "/"));
+  if (normalized === "." || normalized.startsWith("../") || normalized === "..") return null;
+  return normalized;
+}
+
+function encodeRepoRelativePathToDngName(repoRelativePath: string): string {
+  const normalized = repoRelativePath.replaceAll("\\", "/").replace(/^\.\/+/, "");
+  return `${normalized.replaceAll("/", "__")}.dng.json`;
+}
+
+function computeSegmentStatusCounts(dng: DngFile): { ok: number; missing: number; ambiguous: number } {
+  let ok = 0;
+  let missing = 0;
+  let ambiguous = 0;
+  for (const seg of dng.segments) {
+    if (seg.status === "missing") missing++;
+    else if (seg.status === "ambiguous") ambiguous++;
+    else ok++;
+  }
+  return { ok, missing, ambiguous };
+}
+
+export function createDenigmaServer(options: CreateDenigmaServerOptions): express.Express {
+  const repoRoot = resolve(options.repoRoot);
+  const denigmaFilesDir = join(repoRoot, ".denigma", "files");
+
+  const app = express();
+  app.use(cors());
+  app.use(express.json({ limit: "5mb" }));
+
+  app.get("/api/files", async (_req, res) => {
+    let entries: string[] = [];
+    try {
+      entries = await fg("**/*.dng.json", {
+        cwd: denigmaFilesDir,
+        dot: false,
+        onlyFiles: true,
+        absolute: true,
+      });
+    } catch {
+      // If .denigma/files doesn't exist yet, return empty list.
+      entries = [];
+    }
+
+    const files: Array<{
+      sourcePath: string;
+      updatedAt: string;
+      segmentStatus: { ok: number; missing: number; ambiguous: number };
+    }> = [];
+
+    for (const filePath of entries) {
+      try {
+        const text = await readFile(filePath, "utf8");
+        const parsed = parseDngFile(JSON.parse(text));
+        files.push({
+          sourcePath: parsed.sourcePath,
+          updatedAt: parsed.updatedAt,
+          segmentStatus: computeSegmentStatusCounts(parsed),
+        });
+      } catch {
+        // Skip unreadable/invalid entries.
+      }
+    }
+
+    files.sort((a, b) => a.sourcePath.localeCompare(b.sourcePath));
+    res.json({ files });
+  });
+
+  app.get("/api/file", async (req, res) => {
+    const normalizedSourcePath = normalizeRepoRelativePath(String(req.query.path ?? ""));
+    if (!normalizedSourcePath) {
+      res.status(400).json({ error: "Missing required query param: path" });
+      return;
+    }
+
+    const dngPath = join(denigmaFilesDir, encodeRepoRelativePathToDngName(normalizedSourcePath));
+    let dng: DngFile;
+    try {
+      const dngText = await readFile(dngPath, "utf8");
+      dng = parseDngFile(JSON.parse(dngText));
+    } catch {
+      res.status(404).json({ error: "No .dng file found for path" });
+      return;
+    }
+
+    const sourceAbsPath = join(repoRoot, normalizedSourcePath.split("/").join(pathSep));
+    let sourceText: string;
+    try {
+      sourceText = await readFile(sourceAbsPath, "utf8");
+    } catch {
+      res.status(404).json({ error: "Source file not found" });
+      return;
+    }
+
+    res.json({ sourcePath: normalizedSourcePath, sourceText, dng });
+  });
+
+  app.put("/api/file", async (req, res) => {
+    const normalizedSourcePath = normalizeRepoRelativePath(String(req.query.path ?? ""));
+    if (!normalizedSourcePath) {
+      res.status(400).json({ error: "Missing required query param: path" });
+      return;
+    }
+
+    const parsedBody = SaveFileBodySchema.safeParse(req.body);
+    if (!parsedBody.success) {
+      res.status(400).json({ error: "Invalid request body" });
+      return;
+    }
+
+    const dng = parseDngFile(parsedBody.data.dng);
+    if (dng.sourcePath !== normalizedSourcePath) {
+      res.status(400).json({ error: "Body dng.sourcePath must match query param: path" });
+      return;
+    }
+    const dngPath = join(denigmaFilesDir, encodeRepoRelativePathToDngName(normalizedSourcePath));
+    await writeFile(dngPath, JSON.stringify(dng, null, 2) + "\n", "utf8");
+    res.json({ ok: true });
+  });
+
+  app.post("/api/sync", async (req, res) => {
+    const normalizedSourcePath = normalizeRepoRelativePath(String(req.query.path ?? ""));
+    if (!normalizedSourcePath) {
+      res.status(400).json({ error: "Missing required query param: path" });
+      return;
+    }
+
+    const dngPath = join(denigmaFilesDir, encodeRepoRelativePathToDngName(normalizedSourcePath));
+    let dng: DngFile;
+    try {
+      const dngText = await readFile(dngPath, "utf8");
+      dng = parseDngFile(JSON.parse(dngText));
+    } catch {
+      res.status(404).json({ error: "No .dng file found for path" });
+      return;
+    }
+
+    const sourceAbsPath = join(repoRoot, normalizedSourcePath.split("/").join(pathSep));
+    let sourceText: string;
+    try {
+      sourceText = await readFile(sourceAbsPath, "utf8");
+    } catch {
+      res.status(404).json({ error: "Source file not found" });
+      return;
+    }
+
+    const remapped = remapDngFileToText(dng, sourceText);
+    await writeFile(dngPath, JSON.stringify(remapped, null, 2) + "\n", "utf8");
+    res.json({ ok: true, dng: remapped });
+  });
+
+  if (options.uiDistDir) {
+    const uiDist = resolve(options.uiDistDir);
+    app.use(express.static(uiDist));
+    app.get("*", async (_req, res) => {
+      const indexPath = join(uiDist, "index.html");
+      res.type("html").send(await readFile(indexPath, "utf8"));
+    });
+  }
+
+  return app;
+}
