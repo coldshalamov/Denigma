@@ -1,0 +1,24 @@
+{
+  "name": "@denigma/mcp",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "MCP server that enforces the Denigma prompt-to-proof pipeline",
+  "bin": {
+    "denigma-mcp": "./dist/bin.cjs"
+  },
+  "scripts": {
+    "build": "tsup",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@denigma/cli": "0.1.0",
+    "@denigma/core": "0.1.0",
+    "@modelcontextprotocol/sdk": "^1.10.2"
+  },
+  "devDependencies": {
+    "tsup": "^8.0.2",
+    "vitest": "^4.0.18"
+  }
+}
