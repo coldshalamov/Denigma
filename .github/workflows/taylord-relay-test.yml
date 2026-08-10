@@ -1,0 +1,12 @@
+name: TaylorD relay test
+
+on:
+  push:
+    branches:
+      - taylord-relay-test
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "relay works"
